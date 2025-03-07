@@ -59,7 +59,7 @@ class AnimeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'LunaAnime',
+      title: 'PovertyAnime',
       theme: AppTheme.darkTheme(),
       debugShowCheckedModeBanner: false,
       home: const HomePage(),
@@ -108,19 +108,19 @@ class Episode {
   }
 }
 
-class Subtitle {
+class SubtitleTrack {
   final String file;
   final String label;
   final String kind;
 
-  Subtitle({
+  SubtitleTrack({
     required this.file,
     required this.label,
     required this.kind,
   });
 
-  factory Subtitle.fromJson(Map<String, dynamic> json) {
-    return Subtitle(
+  factory SubtitleTrack.fromJson(Map<String, dynamic> json) {
+    return SubtitleTrack(
       file: json['file'],
       label: json['label'],
       kind: json['kind'],
@@ -223,11 +223,11 @@ class AnimeApiService {
         if (data['sources'] != null && data['sources'].length > 0) {
           final url = data['sources'][0]['url'];
           
-          List<Subtitle> subtitles = [];
+          List<SubtitleTrack> subtitles = [];
           if (data['tracks'] != null) {
             subtitles = (data['tracks'] as List)
                 .where((track) => track['kind'] == 'captions')
-                .map((track) => Subtitle.fromJson(track))
+                .map((track) => SubtitleTrack.fromJson(track))
                 .toList();
             
             // Sort to prioritize English subtitles
@@ -263,7 +263,7 @@ final selectedAnimeProvider = StateProvider<Anime?>((ref) => null);
 final episodesProvider = StateProvider<List<Episode>>((ref) => []);
 final currentEpisodeProvider = StateProvider<Episode?>((ref) => null);
 final videoUrlProvider = StateProvider<String?>((ref) => null);
-final subtitlesProvider = StateProvider<List<Subtitle>>((ref) => []);
+final subtitlesProvider = StateProvider<List<SubtitleTrack>>((ref) => []);
 
 // Home Page
 class HomePage extends ConsumerStatefulWidget {
@@ -336,7 +336,7 @@ class _HomePageState extends ConsumerState<HomePage> with SingleTickerProviderSt
               floating: true,
               pinned: true,
               title: const Text(
-                'LunaAnime',
+                'PovertyAnime',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 24,
@@ -656,13 +656,14 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
     final source = await AnimeApiService.getEpisodeSource(episode.episodeId);
     if (source != null) {
       final url = source['url'];
-      final subtitles = source['subtitles'] as List<Subtitle>;
+      final subtitles = (source['subtitles'] as List<dynamic>)
+          .map((s) => SubtitleTrack.fromJson(s))
+          .toList();
       
       ref.read(currentEpisodeProvider.notifier).state = episode;
       ref.read(videoUrlProvider.notifier).state = url;
       ref.read(subtitlesProvider.notifier).state = subtitles;
       
-      // Initialize video player
       _initializeVideoPlayer(url, subtitles);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -671,20 +672,17 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
     }
   }
 
-  void _initializeVideoPlayer(String url, List<Subtitle> subtitles) async {
-    // Dispose previous controllers if they exist
+  void _initializeVideoPlayer(String url, List<SubtitleTrack> subtitles) async {
     _videoController?.dispose();
     _chewieController?.dispose();
     
-    setState(() {
-      _isVideoInitialized = false;
-    });
+    setState(() => _isVideoInitialized = false);
     
     _videoController = VideoPlayerController.network(url);
     
     try {
       await _videoController!.initialize();
-      
+
       _chewieController = ChewieController(
         videoPlayerController: _videoController!,
         autoPlay: true,
@@ -702,19 +700,15 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
             ),
           ),
         ),
-        errorBuilder: (context, errorMessage) {
-          return Center(
-            child: Text(
-              errorMessage,
-              style: const TextStyle(color: Colors.white),
-            ),
-          );
-        },
+        errorBuilder: (context, errorMessage) => Center(
+          child: Text(
+            errorMessage,
+            style: const TextStyle(color: Colors.white),
+          ),
+        ),
       );
       
-      setState(() {
-        _isVideoInitialized = true;
-      });
+      setState(() => _isVideoInitialized = true);
     } catch (e) {
       print('Error initializing video player: $e');
       ScaffoldMessenger.of(context).showSnackBar(

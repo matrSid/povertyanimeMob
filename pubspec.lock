@@ -661,6 +661,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
+  subtitle:
+    dependency: "direct main"
+    description:
+      name: subtitle
+      sha256: "29115fbaa5d87c5909ffa477cbfdeec2c6ee8ac9a5ef3dce9b2db731afc79f26"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.4"
   synchronized:
     dependency: transitive
     description:
