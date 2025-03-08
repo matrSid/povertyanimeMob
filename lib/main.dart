@@ -6,7 +6,7 @@ import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-//import 'package:flutter_svg/flutter_svg.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -630,7 +630,6 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
   VideoPlayerController? _videoController;
   ChewieController? _chewieController;
   bool _isVideoInitialized = false;
-  bool _isLoading = false;
 
   @override
   void initState() {
@@ -654,12 +653,8 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
   }
 
   void _playEpisode(Episode episode) async {
-    setState(() {
-      _isLoading = true;
-    });
-    
     final source = await AnimeApiService.getEpisodeSource(episode.episodeId);
-    if (source != null && mounted) {
+    if (source != null) {
       final url = source['url'];
       final subtitles = source['subtitles'] as List<Subtitle>;
       
@@ -669,10 +664,7 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
       
       // Initialize video player
       _initializeVideoPlayer(url, subtitles);
-    } else if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to load video source')),
       );
@@ -692,8 +684,6 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
     
     try {
       await _videoController!.initialize();
-      
-      if (!mounted) return;
       
       _chewieController = ChewieController(
         videoPlayerController: _videoController!,
@@ -720,48 +710,20 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
             ),
           );
         },
-        // Add listener to detect when video is ready to play
-        additionalOptions: (context) {
-          return <OptionItem>[]; // Empty list to enable the listener without adding options
-        },
+        // Fix for loading indicator issue
+        // Make the loading indicator disappear immediately when playback starts
+        customControls: const MaterialControls(),
       );
-      
-      // Add value listener to detect changes in player state
-      _videoController!.addListener(_onVideoControllerUpdate);
       
       setState(() {
         _isVideoInitialized = true;
-        _isLoading = false;
       });
     } catch (e) {
-      if (!mounted) return;
-      
       print('Error initializing video player: $e');
-      setState(() {
-        _isLoading = false;
-      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error loading video: $e')),
       );
     }
-  }
-  
-  void _onVideoControllerUpdate() {
-    // Update state when video position changes (which happens during seeking)
-    if (_videoController!.value.isPlaying || _videoController!.value.position > Duration.zero) {
-      if (_isLoading && mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
-  @override
-  void deactivate() {
-    // Remove listener when widget is removed from tree
-    _videoController?.removeListener(_onVideoControllerUpdate);
-    super.deactivate();
   }
 
   void _closeDetails() {
@@ -778,6 +740,10 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
     final videoUrl = ref.watch(videoUrlProvider);
     final size = MediaQuery.of(context).size;
     
+    // Calculate a reasonable height for the episodes list based on screen size
+    // This is key to fixing the overflow issue
+    final episodesListHeight = size.height * 0.4;
+    
     return AnimatedBuilder(
       animation: _slideAnimation,
       builder: (context, child) {
@@ -786,101 +752,120 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
           child: child,
         );
       },
-      child: Container(
-        height: size.height * 0.9,
-        decoration: const BoxDecoration(
-          color: AppTheme.backgroundColor,
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(24),
-            topRight: Radius.circular(24),
-          ),
-        ),
-        child: Column(
-          children: [
-            // Handle bar
-            Container(
-              margin: const EdgeInsets.only(top: 12),
-              width: 60,
-              height: 5,
-              decoration: BoxDecoration(
-                color: Colors.grey[600],
-                borderRadius: BorderRadius.circular(10),
+      child: DraggableScrollableSheet(
+        // Fix for bottom overflow - use DraggableScrollableSheet
+        initialChildSize: 0.9,
+        minChildSize: 0.5, 
+        maxChildSize: 0.95,
+        builder: (_, scrollController) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: AppTheme.backgroundColor,
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(24),
+                topRight: Radius.circular(24),
               ),
             ),
-            // Fix for overflow issue - Expanded widget contains the content
-            Expanded(
-              child: SingleChildScrollView(  // Add SingleChildScrollView to prevent overflow
-                physics: const ClampingScrollPhysics(),  // Prevents bouncing effect
-                child: Stack(
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // Video player section with fixed height
-                        Container(
-                          height: 230,
-                          margin: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.black,
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.3),
-                                blurRadius: 10,
-                                offset: const Offset(0, 5),
-                              ),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: videoUrl != null && _isVideoInitialized
-                                ? Stack(
-                                    children: [
-                                      Chewie(controller: _chewieController!),
-                                      if (_isLoading)
-                                        Container(
-                                          color: Colors.black.withOpacity(0.5),
-                                          child: const Center(
-                                            child: SpinKitRipple(
-                                              color: AppTheme.primaryColor,
-                                              size: 50.0,
-                                            ),
-                                          ),
-                                        ),
-                                    ],
-                                  )
-                                : Center(
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        videoUrl != null
-                                            ? const SpinKitRipple(
-                                                color: AppTheme.primaryColor,
-                                                size: 50.0,
-                                              )
-                                            : const Icon(
-                                                Icons.play_circle_outline,
-                                                color: AppTheme.primaryColor,
-                                                size: 80,
-                                              ),
-                                        const SizedBox(height: 16),
-                                        Text(
-                                          videoUrl != null
-                                              ? 'Loading video...'
-                                              : 'Select an episode to play',
-                                          style: TextStyle(
-                                            color: AppTheme.secondaryTextColor,
-                                            fontSize: 16,
-                                          ),
-                                        ),
-                                      ],
+            child: Column(
+              children: [
+                // Handle bar
+                Container(
+                  margin: const EdgeInsets.only(top: 12),
+                  width: 60,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[600],
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                Expanded(
+                  child: CustomScrollView(
+                    controller: scrollController,
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: Stack(
+                          children: [
+                            // Video player section
+                            Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: Container(
+                                height: 230,
+                                decoration: BoxDecoration(
+                                  color: Colors.black,
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.3),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 5),
                                     ),
+                                  ],
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: videoUrl != null && _isVideoInitialized
+                                      ? Chewie(controller: _chewieController!)
+                                      : Center(
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              videoUrl != null
+                                                  ? const SpinKitRipple(
+                                                      color: AppTheme.primaryColor,
+                                                      size: 50.0,
+                                                    )
+                                                  : SvgPicture.asset(
+                                                      'assets/images/play_illustration.svg',
+                                                      height: 100,
+                                                      semanticsLabel: 'Play Illustration',
+                                                      placeholderBuilder: (context) => Icon(
+                                                        Icons.play_circle_outline,
+                                                        color: AppTheme.primaryColor,
+                                                        size: 80,
+                                                      ),
+                                                    ),
+                                              const SizedBox(height: 16),
+                                              Text(
+                                                videoUrl != null
+                                                    ? 'Loading video...'
+                                                    : 'Select an episode to play',
+                                                style: TextStyle(
+                                                  color: AppTheme.secondaryTextColor,
+                                                  fontSize: 16,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                ),
+                              ),
+                            ),
+                            
+                            // Close button
+                            Positioned(
+                              top: 24,
+                              right: 24,
+                              child: GestureDetector(
+                                onTap: _closeDetails,
+                                child: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.5),
+                                    shape: BoxShape.circle,
                                   ),
-                          ),
+                                  child: const Icon(
+                                    Icons.close,
+                                    color: Colors.white,
+                                    size: 24,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-
-                        // Title and episodes header
-                        Padding(
+                      ),
+                      SliverToBoxAdapter(
+                        child: Padding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -917,8 +902,9 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
                             ],
                           ),
                         ),
-
-                        const Padding(
+                      ),
+                      const SliverToBoxAdapter(
+                        child: Padding(
                           padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
                           child: Text(
                             'Episodes',
@@ -928,61 +914,104 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
                             ),
                           ),
                         ),
-
-                        // Episodes list with FIXED HEIGHT to prevent overflow
-                        Container(
-                          height: size.height * 0.5, // Use a percentage of screen height
-                          padding: const EdgeInsets.only(bottom: 16),
-                          child: episodes.isEmpty
-                              ? const Center(
+                      ),
+                      SliverToBoxAdapter(
+                        child: episodes.isEmpty
+                            ? SizedBox(
+                                height: episodesListHeight,
+                                child: const Center(
                                   child: SpinKitThreeBounce(
                                     color: AppTheme.primaryColor,
                                     size: 30.0,
                                   ),
-                                )
-                              : ListView.builder(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                                  itemCount: episodes.length,
-                                  itemBuilder: (context, index) {
-                                    final episode = episodes[index];
-                                    return EpisodeListTile(
-                                      episode: episode,
-                                      isSelected: currentEpisode?.episodeId == episode.episodeId,
-                                      onTap: () => _playEpisode(episode),
-                                    );
-                                  },
                                 ),
-                        ),
-                      ],
-                    ),
-
-                    // Close button
-                    Positioned(
-                      top: 16,
-                      right: 16,
-                      child: GestureDetector(
-                        onTap: _closeDetails,
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.5),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.close,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                        ),
+                              )
+                            : SizedBox(
+                                height: episodesListHeight,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(bottom: 16.0),
+                                  child: ListView.builder(
+                                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                                    itemCount: episodes.length,
+                                    itemBuilder: (context, index) {
+                                      final episode = episodes[index];
+                                      return EpisodeListTile(
+                                        episode: episode,
+                                        isSelected: currentEpisode?.episodeId == episode.episodeId,
+                                        onTap: () => _playEpisode(episode),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class VideoPlayerWithCustomLoading extends StatefulWidget {
+  final VideoPlayerController controller;
+  final ChewieController chewieController;
+
+  const VideoPlayerWithCustomLoading({
+    Key? key,
+    required this.controller,
+    required this.chewieController,
+  }) : super(key: key);
+
+  @override
+  _VideoPlayerWithCustomLoadingState createState() => _VideoPlayerWithCustomLoadingState();
+}
+
+class _VideoPlayerWithCustomLoadingState extends State<VideoPlayerWithCustomLoading> {
+  bool _isBuffering = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_updateBufferingStatus);
+  }
+
+  void _updateBufferingStatus() {
+    final newBuffering = widget.controller.value.isBuffering;
+    if (_isBuffering != newBuffering) {
+      setState(() {
+        _isBuffering = newBuffering;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_updateBufferingStatus);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Chewie(controller: widget.chewieController),
+        if (_isBuffering)
+          Container(
+            color: Colors.black45,
+            child: const Center(
+              child: SpinKitCircle(
+                color: AppTheme.primaryColor,
+                size: 40.0,
               ),
             ),
-          ],
-        ),
-      ),
+          ),
+      ],
     );
   }
 }
