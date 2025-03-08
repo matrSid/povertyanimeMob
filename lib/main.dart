@@ -6,7 +6,7 @@ import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+//import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -108,19 +108,19 @@ class Episode {
   }
 }
 
-class SubtitleTrack {
+class Subtitle {
   final String file;
   final String label;
   final String kind;
 
-  SubtitleTrack({
+  Subtitle({
     required this.file,
     required this.label,
     required this.kind,
   });
 
-  factory SubtitleTrack.fromJson(Map<String, dynamic> json) {
-    return SubtitleTrack(
+  factory Subtitle.fromJson(Map<String, dynamic> json) {
+    return Subtitle(
       file: json['file'],
       label: json['label'],
       kind: json['kind'],
@@ -223,11 +223,11 @@ class AnimeApiService {
         if (data['sources'] != null && data['sources'].length > 0) {
           final url = data['sources'][0]['url'];
           
-          List<SubtitleTrack> subtitles = [];
+          List<Subtitle> subtitles = [];
           if (data['tracks'] != null) {
             subtitles = (data['tracks'] as List)
                 .where((track) => track['kind'] == 'captions')
-                .map((track) => SubtitleTrack.fromJson(track))
+                .map((track) => Subtitle.fromJson(track))
                 .toList();
             
             // Sort to prioritize English subtitles
@@ -263,7 +263,7 @@ final selectedAnimeProvider = StateProvider<Anime?>((ref) => null);
 final episodesProvider = StateProvider<List<Episode>>((ref) => []);
 final currentEpisodeProvider = StateProvider<Episode?>((ref) => null);
 final videoUrlProvider = StateProvider<String?>((ref) => null);
-final subtitlesProvider = StateProvider<List<SubtitleTrack>>((ref) => []);
+final subtitlesProvider = StateProvider<List<Subtitle>>((ref) => []);
 
 // Home Page
 class HomePage extends ConsumerStatefulWidget {
@@ -630,6 +630,7 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
   VideoPlayerController? _videoController;
   ChewieController? _chewieController;
   bool _isVideoInitialized = false;
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -653,36 +654,47 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
   }
 
   void _playEpisode(Episode episode) async {
+    setState(() {
+      _isLoading = true;
+    });
+    
     final source = await AnimeApiService.getEpisodeSource(episode.episodeId);
-    if (source != null) {
+    if (source != null && mounted) {
       final url = source['url'];
-      final subtitles = (source['subtitles'] as List<dynamic>)
-          .map((s) => SubtitleTrack.fromJson(s))
-          .toList();
+      final subtitles = source['subtitles'] as List<Subtitle>;
       
       ref.read(currentEpisodeProvider.notifier).state = episode;
       ref.read(videoUrlProvider.notifier).state = url;
       ref.read(subtitlesProvider.notifier).state = subtitles;
       
+      // Initialize video player
       _initializeVideoPlayer(url, subtitles);
-    } else {
+    } else if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to load video source')),
       );
     }
   }
 
-  void _initializeVideoPlayer(String url, List<SubtitleTrack> subtitles) async {
+  void _initializeVideoPlayer(String url, List<Subtitle> subtitles) async {
+    // Dispose previous controllers if they exist
     _videoController?.dispose();
     _chewieController?.dispose();
     
-    setState(() => _isVideoInitialized = false);
+    setState(() {
+      _isVideoInitialized = false;
+    });
     
     _videoController = VideoPlayerController.network(url);
     
     try {
       await _videoController!.initialize();
-
+      
+      if (!mounted) return;
+      
       _chewieController = ChewieController(
         videoPlayerController: _videoController!,
         autoPlay: true,
@@ -700,21 +712,56 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
             ),
           ),
         ),
-        errorBuilder: (context, errorMessage) => Center(
-          child: Text(
-            errorMessage,
-            style: const TextStyle(color: Colors.white),
-          ),
-        ),
+        errorBuilder: (context, errorMessage) {
+          return Center(
+            child: Text(
+              errorMessage,
+              style: const TextStyle(color: Colors.white),
+            ),
+          );
+        },
+        // Add listener to detect when video is ready to play
+        additionalOptions: (context) {
+          return <OptionItem>[]; // Empty list to enable the listener without adding options
+        },
       );
       
-      setState(() => _isVideoInitialized = true);
+      // Add value listener to detect changes in player state
+      _videoController!.addListener(_onVideoControllerUpdate);
+      
+      setState(() {
+        _isVideoInitialized = true;
+        _isLoading = false;
+      });
     } catch (e) {
+      if (!mounted) return;
+      
       print('Error initializing video player: $e');
+      setState(() {
+        _isLoading = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error loading video: $e')),
       );
     }
+  }
+  
+  void _onVideoControllerUpdate() {
+    // Update state when video position changes (which happens during seeking)
+    if (_videoController!.value.isPlaying || _videoController!.value.position > Duration.zero) {
+      if (_isLoading && mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void deactivate() {
+    // Remove listener when widget is removed from tree
+    _videoController?.removeListener(_onVideoControllerUpdate);
+    super.deactivate();
   }
 
   void _closeDetails() {
@@ -760,157 +807,177 @@ class _AnimeDetailsSheetState extends ConsumerState<AnimeDetailsSheet> with Sing
                 borderRadius: BorderRadius.circular(10),
               ),
             ),
+            // Fix for overflow issue - Expanded widget contains the content
             Expanded(
-              child: Stack(
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Video player section
-                      Container(
-                        height: 230,
-                        margin: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.black,
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.3),
-                              blurRadius: 10,
-                              offset: const Offset(0, 5),
-                            ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(16),
-                          child: videoUrl != null && _isVideoInitialized
-                              ? Chewie(controller: _chewieController!)
-                              : Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
+              child: SingleChildScrollView(  // Add SingleChildScrollView to prevent overflow
+                physics: const ClampingScrollPhysics(),  // Prevents bouncing effect
+                child: Stack(
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Video player section with fixed height
+                        Container(
+                          height: 230,
+                          margin: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.black,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.3),
+                                blurRadius: 10,
+                                offset: const Offset(0, 5),
+                              ),
+                            ],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: videoUrl != null && _isVideoInitialized
+                                ? Stack(
                                     children: [
-                                      videoUrl != null
-                                          ? const SpinKitRipple(
+                                      Chewie(controller: _chewieController!),
+                                      if (_isLoading)
+                                        Container(
+                                          color: Colors.black.withOpacity(0.5),
+                                          child: const Center(
+                                            child: SpinKitRipple(
                                               color: AppTheme.primaryColor,
                                               size: 50.0,
-                                            )
-                                          : SvgPicture.asset(
-                                              'assets/images/play_illustration.svg',
-                                              height: 100,
-                                              semanticsLabel: 'Play Illustration',
                                             ),
-                                      const SizedBox(height: 16),
-                                      Text(
+                                          ),
+                                        ),
+                                    ],
+                                  )
+                                : Center(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
                                         videoUrl != null
-                                            ? 'Loading video...'
-                                            : 'Select an episode to play',
-                                        style: TextStyle(
-                                          color: AppTheme.secondaryTextColor,
-                                          fontSize: 16,
+                                            ? const SpinKitRipple(
+                                                color: AppTheme.primaryColor,
+                                                size: 50.0,
+                                              )
+                                            : const Icon(
+                                                Icons.play_circle_outline,
+                                                color: AppTheme.primaryColor,
+                                                size: 80,
+                                              ),
+                                        const SizedBox(height: 16),
+                                        Text(
+                                          videoUrl != null
+                                              ? 'Loading video...'
+                                              : 'Select an episode to play',
+                                          style: TextStyle(
+                                            color: AppTheme.secondaryTextColor,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                          ),
+                        ),
+
+                        // Title and episodes header
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  selectedAnime?.name ?? 'Loading...',
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              currentEpisode != null
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: AppTheme.primaryColor,
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      child: Text(
+                                        'EP ${currentEpisode.episodeNo}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                ),
+                                    )
+                                  : const SizedBox(),
+                            ],
+                          ),
                         ),
-                      ),
 
-                      // Title and episodes header
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                selectedAnime?.name ?? 'Loading...',
-                                style: const TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+                          child: Text(
+                            'Episodes',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
                             ),
-                            currentEpisode != null
-                                ? Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.primaryColor,
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      'EP ${currentEpisode.episodeNo}',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  )
-                                : const SizedBox(),
-                          ],
+                          ),
                         ),
-                      ),
 
-                      const Padding(
-                        padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
-                        child: Text(
-                          'Episodes',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+                        // Episodes list with FIXED HEIGHT to prevent overflow
+                        Container(
+                          height: size.height * 0.5, // Use a percentage of screen height
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: episodes.isEmpty
+                              ? const Center(
+                                  child: SpinKitThreeBounce(
+                                    color: AppTheme.primaryColor,
+                                    size: 30.0,
+                                  ),
+                                )
+                              : ListView.builder(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  itemCount: episodes.length,
+                                  itemBuilder: (context, index) {
+                                    final episode = episodes[index];
+                                    return EpisodeListTile(
+                                      episode: episode,
+                                      isSelected: currentEpisode?.episodeId == episode.episodeId,
+                                      onTap: () => _playEpisode(episode),
+                                    );
+                                  },
+                                ),
+                        ),
+                      ],
+                    ),
+
+                    // Close button
+                    Positioned(
+                      top: 16,
+                      right: 16,
+                      child: GestureDetector(
+                        onTap: _closeDetails,
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.white,
+                            size: 24,
                           ),
                         ),
                       ),
-
-                      // Episodes list
-                      Expanded(
-                        child: episodes.isEmpty
-                            ? const Center(
-                                child: SpinKitThreeBounce(
-                                  color: AppTheme.primaryColor,
-                                  size: 30.0,
-                                ),
-                              )
-                            : ListView.builder(
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                itemCount: episodes.length,
-                                itemBuilder: (context, index) {
-                                  final episode = episodes[index];
-                                  return EpisodeListTile(
-                                    episode: episode,
-                                    isSelected: currentEpisode?.episodeId == episode.episodeId,
-                                    onTap: () => _playEpisode(episode),
-                                  );
-                                },
-                              ),
-                      ),
-                    ],
-                  ),
-
-                  // Close button
-                  Positioned(
-                    top: 16,
-                    right: 16,
-                    child: GestureDetector(
-                      onTap: _closeDetails,
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.5),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.close,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
